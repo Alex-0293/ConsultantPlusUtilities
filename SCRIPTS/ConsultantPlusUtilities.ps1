@@ -17,7 +17,6 @@ Param (
     [Parameter( Mandatory = $false, Position = 1, HelpMessage = "Log cut date and time." )]
     [datetime] $LogCutDate
 )
-Clear-Host
 $Global:ScriptInvocation = $MyInvocation
 $InitScript        = "C:\DATA\Projects\GlobalSettings\SCRIPTS\Init.ps1"
 . "$InitScript" -MyScriptRoot (Split-Path $PSCommandPath -Parent)
@@ -25,29 +24,31 @@ if ($LastExitCode) { exit 1 }
 
 # Error trap
 trap {
-    if ($Global:Logger) {
-        Get-ErrorReporting $_
+    if (get-module -FullyQualifiedName AlexkUtils) {
+        Get-ErrorReporting $_        
         . "$GlobalSettings\$SCRIPTSFolder\Finish.ps1" 
     }
     Else {
-        Write-Host "[$($MyInvocation.MyCommand.path)] There is error before logging initialized." -ForegroundColor Red
-    }   
+        Write-Host "[$($MyInvocation.MyCommand.path)] There is error before logging initialized. Error: $_" -ForegroundColor Red
+    }  
+    $Global:GlobalSettingsSuccessfullyLoaded = $false
     exit 1
 }
 ################################# Script start here #################################
 $WorkDir = Split-Path -path $ConsPath -Parent
 
-#$Service = "SHRINK"
+#$Service = "UPDATE"
 switch ($Service.ToUpper()) {
     "UPDATE"    { 
         $ScriptBlock = {
             $Res = [PSCustomObject]@{
                 Data               = $Null
-                LogBuffer          = @{}
+                LogBuffer          = @()
                 FreeDiskSpace      = 0
                 NewFreeDiskSpace   = 0
             }
 
+            #Write-host "ParentLevel = $ParentLevel"
             $ConsPath            = $Using:ConsPath
             $UpdateArguments     = $Using:UpdateArguments
             $WorkDir             = $Using:WorkDir
@@ -64,12 +65,12 @@ switch ($Service.ToUpper()) {
         }
         Add-ToLog -Message "Starting update." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if (@($res.LogBuffer).Count) {
+        if ($res.LogBuffer) {
             foreach ($item in $Res.LogBuffer) {
                 Add-ToLog @item
             }            
         }
-        if ($Res.NewFreeDiskSpace -and $Res.FreeDiskSpace) {
+        if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
             Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         }
 
@@ -79,7 +80,7 @@ switch ($Service.ToUpper()) {
         $ScriptBlock = {
             $Res = [PSCustomObject]@{
                 Data             = $Null
-                LogBuffer        = @{}
+                LogBuffer        = @()
                 FreeDiskSpace    = 0
                 NewFreeDiskSpace = 0
             }
@@ -100,15 +101,15 @@ switch ($Service.ToUpper()) {
         }
         Add-ToLog -Message "Starting database shrink." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if (@($res.LogBuffer).Count) {
+        if ($res.LogBuffer) {
             foreach ($item in $Res.LogBuffer) {
-                Add-ToLog @item   
+                Add-ToLog @item
             }            
         }
-        if ($Res.NewFreeDiskSpace -and $Res.FreeDiskSpace) {
+        if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
             Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         }
-
+        
         . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime
     }
     Default {
@@ -117,7 +118,7 @@ switch ($Service.ToUpper()) {
                 ConsErrorFile      = ""
                 ConsInetFileList   = ""
                 ConsInetFile       = ""
-                LogBuffer          = @{}
+                LogBuffer          = @()
                 AvgDlSpeed         = ""
             }
 
@@ -268,10 +269,10 @@ switch ($Service.ToUpper()) {
                 Add-ToLog -Message "Average download speed [$Data]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
             }      
 
-            if (@($Res.LogBuffer).Count){
+            if ($res.LogBuffer) {
                 foreach ($item in $Res.LogBuffer) {
                     Add-ToLog @item
-                }
+                }            
             }
         }
     }    
