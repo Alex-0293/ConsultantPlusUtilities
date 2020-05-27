@@ -11,15 +11,20 @@
         ConsultantPlusUtilities.ps1
 #>
 Param (
-    [Parameter( Mandatory = $false, Position = 0, HelpMessage = "Select service utility." )]
+    [Parameter( Mandatory = $false, Position = 1, HelpMessage = "Initialize global settings." )]
+    [bool] $InitGlobal = $true,
+    [Parameter( Mandatory = $false, Position = 2, HelpMessage = "Initialize local settings." )]
+    [bool] $InitLocal  = $true, 
+    [Parameter( Mandatory = $false, Position = 3, HelpMessage = "Select service utility." )]
     [ValidateSet("Update", "Shrink")]
     [string] $Service,
-    [Parameter( Mandatory = $false, Position = 1, HelpMessage = "Log cut date and time." )]
+    [Parameter( Mandatory = $false, Position = 4, HelpMessage = "Log cut date and time." )]
     [datetime] $LogCutDate
 )
+
 $Global:ScriptInvocation = $MyInvocation
 $InitScript        = "C:\DATA\Projects\GlobalSettings\SCRIPTS\Init.ps1"
-. "$InitScript" -MyScriptRoot (Split-Path $PSCommandPath -Parent)
+. "$InitScript" -MyScriptRoot (Split-Path $PSCommandPath -Parent) -InitGlobal $InitGlobal -InitLocal $InitLocal
 if ($LastExitCode) { exit 1 }
 
 # Error trap
@@ -74,7 +79,7 @@ switch ($Service.ToUpper()) {
             Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         }
 
-        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime
+        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
     }
     "SHRINK" { 
         $ScriptBlock = {
@@ -101,7 +106,7 @@ switch ($Service.ToUpper()) {
         }
         Add-ToLog -Message "Starting database shrink." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if ($res.LogBuffer) {
+        if ($Res.LogBuffer) {
             foreach ($item in $Res.LogBuffer) {
                 Add-ToLog @item
             }            
@@ -110,7 +115,7 @@ switch ($Service.ToUpper()) {
             Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         }
         
-        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime
+        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
     }
     Default {
         $Scriptblock = {
@@ -188,9 +193,12 @@ switch ($Service.ToUpper()) {
             if (Test-Path "$ConsUserDataFolder\$ConsInetFileList") {
                 $Content = Get-Content -Path "$ConsUserDataFolder\$ConsInetFileList" -Encoding Default -Tail $ReadLastLines
                 [string] $LastLine = $Content | Select-Object -Last 1
+                
                 if ($lastLine.Contains("Средняя скорость скачивания файлов с сервера ИП")) {
                     $Res.AvgDlSpeed = ($LastLine.Split("-"))[1].Trim()  
+                    $Content = $Content | Select-Object -First (@($Content).count-1)
                 }
+                
                 [array] $TodayInetFileListContent = @()
                 foreach ($line in $Content) {
                     if ($line -notlike "*------*"){
