@@ -30,7 +30,7 @@ if ($LastExitCode) { exit 1 }
 trap {
     if (get-module -FullyQualifiedName AlexkUtils) {
         Get-ErrorReporting $_        
-        . "$GlobalSettings\$SCRIPTSFolder\Finish.ps1" 
+        . "$GlobalSettingsPath\$SCRIPTSFolder\Finish.ps1" 
     }
     Else {
         Write-Host "[$($MyInvocation.MyCommand.path)] There is error before logging initialized. Error: $_" -ForegroundColor Red
@@ -39,6 +39,10 @@ trap {
     exit 1
 }
 ################################# Script start here #################################
+$Login = Get-VarToString(Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_LoginFilePath)
+$Pass = Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_PassFilePath
+$Credentials = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $Login, $Pass
+
 $WorkDir = Split-Path -path $ConsPath -Parent
 
 #$Service = "UPDATE"
@@ -68,17 +72,30 @@ switch ($Service.ToUpper()) {
             return  $Res
         }
         Add-ToLog -Message "Starting update." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-        $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if ($res.LogBuffer) {
-            foreach ($item in $Res.LogBuffer) {
-                Add-ToLog @item
-            }            
-        }
-        if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
-            Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-        }
+        try {
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -credentials $Credentials
+            if ($res.LogBuffer) {
+                foreach ($item in $Res.LogBuffer) {
+                    Add-ToLog @item
+                }            
+            }
+            if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
+                Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            }
+            $Global:StateObject.Action      = "Update"
+            $Global:StateObject.State       = "Completed udate on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $True
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
 
-        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+            . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+
+        }
+        Catch {
+            $Global:StateObject.Action      = "Update"
+            $Global:StateObject.State       = "Errors while update on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $false
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+        }
     }
     "SHRINK" { 
         $ScriptBlock = {
@@ -104,17 +121,31 @@ switch ($Service.ToUpper()) {
             return  $Res
         }
         Add-ToLog -Message "Starting database shrink." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-        $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if ($Res.LogBuffer) {
-            foreach ($item in $Res.LogBuffer) {
-                Add-ToLog @item
-            }            
-        }
-        if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
-            Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-        }
+        try {
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials
+            if ($Res.LogBuffer) {
+                foreach ($item in $Res.LogBuffer) {
+                    Add-ToLog @item
+                }            
+            }
+            if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
+                Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            }
         
-        . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+            $Global:StateObject.Action      = "Shrink"
+            $Global:StateObject.State       = "Completed shrink on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $True
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+
+            . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+
+        }
+        Catch {
+            $Global:StateObject.Action      = "Shrink"
+            $Global:StateObject.State       = "Errors while shrink on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $false
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+        }
     }
     Default {
         $Scriptblock = {
@@ -251,39 +282,51 @@ switch ($Service.ToUpper()) {
         }        
         
         Add-ToLog -Message "Starting statistic on computer [$RemoteComputer]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-        $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"
-        if ($res) {
-            $Data = $res.ConsErrorFile
-            if ($Data){
-                foreach ($item in $Data) {
-                    Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Error" -Level ($ParentLevel + 1)
-                }                
-            }
-            $Data = $res.ConsInetFileList
-            if ($Data) {
-                foreach ($item in $Data) {
-                    Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-                }                
-            }
-            $Data = $res.ConsInetFile
-            if ($Data) {
-                foreach ($item in $Data) {
-                    Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-                }                
-            }  
-            $Data = $res.AvgDlSpeed
-            if ($Data) {     
-                Add-ToLog -Message "Average download speed [$Data]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
-            }      
+        try {
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"  -Credentials $Credentials
+            if ($res) {
+                $Data = $res.ConsErrorFile
+                if ($Data){
+                    foreach ($item in $Data) {
+                        Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Error" -Level ($ParentLevel + 1)
+                    }                
+                }
+                $Data = $res.ConsInetFileList
+                if ($Data) {
+                    foreach ($item in $Data) {
+                        Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+                    }                
+                }
+                $Data = $res.ConsInetFile
+                if ($Data) {
+                    foreach ($item in $Data) {
+                        Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+                    }                
+                }  
+                $Data = $res.AvgDlSpeed
+                if ($Data) {     
+                    Add-ToLog -Message "Average download speed [$Data]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+                }      
 
-            if ($res.LogBuffer) {
-                foreach ($item in $Res.LogBuffer) {
-                    Add-ToLog @item
-                }            
+                if ($res.LogBuffer) {
+                    foreach ($item in $Res.LogBuffer) {
+                        Add-ToLog @item
+                    }            
+                }
             }
+            $Global:StateObject.Action      = "Statistic"
+            $Global:StateObject.State       = "Completed statistic on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $True
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+        }
+        Catch {
+            $Global:StateObject.Action      = "Statistic"
+            $Global:StateObject.State       = "Errors while statistic on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $false
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
         }
     }    
 }
 
 ################################# Script end here ###################################
-. "$GlobalSettings\$SCRIPTSFolder\Finish.ps1"
+. "$GlobalSettingsPath\$SCRIPTSFolder\Finish.ps1"
