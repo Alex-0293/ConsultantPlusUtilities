@@ -11,8 +11,10 @@
 [string] $Global:ConsInetFile     = "CONS_INET.TXT"
 [int16]  $Global:ReadLastLines    = 300
 
-[string] $Global:UpdateArguments  = "/adm /receive_inet /base* /yes /sendstt"
-[string] $Global:ShrinkArguments  = "/COMPRESS /BASE* /YES /ADM"
+[string] $Global:UpdateArguments   = "/adm /receive_inet /base* /yes /process=1"
+[string] $Global:ShrinkArguments   = "/COMPRESS /BASE* /YES /ADM"
+[string] $Global:BaseTestArguments = "/ADM /BASETEST /BASE* /YES"
+[string] $Global:TestArguments     = "/TEST /YES"
 
 . $Global:Plugins.telegram
 
