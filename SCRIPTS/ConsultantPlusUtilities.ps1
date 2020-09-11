@@ -16,7 +16,7 @@ Param (
     [Parameter( Mandatory = $false, Position = 2, HelpMessage = "Initialize local settings." )]
     [bool] $InitLocal  = $true, 
     [Parameter( Mandatory = $false, Position = 3, HelpMessage = "Select service utility." )]
-    [ValidateSet("Update", "Shrink")]
+    [ValidateSet("Update", "Shrink", "BaseTest", "Test")]
     [string] $Service,
     [Parameter( Mandatory = $false, Position = 4, HelpMessage = "Log cut date and time." )]
     [datetime] $LogCutDate
@@ -39,112 +39,248 @@ trap {
     exit 1
 }
 ################################# Script start here #################################
-$Login = Get-VarToString(Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_LoginFilePath)
-$Pass = Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_PassFilePath
+$Login       = Get-VarToString(Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_LoginFilePath)
+$Pass        = Get-VarFromAESFile $global:GlobalKey1 $Global:APP_SCRIPT_ADMIN_PassFilePath
 $Credentials = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $Login, $Pass
 
 $WorkDir = Split-Path -path $ConsPath -Parent
 
+& ipconfig /flushdns
 #$Service = "UPDATE"
 switch ($Service.ToUpper()) {
     "UPDATE"    { 
         $ScriptBlock = {
             $Res = [PSCustomObject]@{
-                Data               = $Null
-                LogBuffer          = @()
-                FreeDiskSpace      = 0
-                NewFreeDiskSpace   = 0
+                Data         = $Null
+                LogBuffer    = @()
+                DiskSpace    = 0
+                NewDiskSpace = 0
             }
 
             #Write-host "ParentLevel = $ParentLevel"
-            $ConsPath            = $Using:ConsPath
-            $UpdateArguments     = $Using:UpdateArguments
-            $WorkDir             = $Using:WorkDir
-            $ScriptLogFilePath   = $Using:ScriptLogFilePath
-            $Res.FreeDiskSpace   = [math]::Round((Get-PSDrive ((Get-Item $WorkDir).PSDrive.Name)).Free / 1gb, 2)
+            $ConsPath          = $Using:ConsPath
+            $UpdateArguments   = $Using:UpdateArguments
+            $WorkDir           = $Using:WorkDir
+            $ScriptLogFilePath = $Using:ScriptLogFilePath
+            $Res.DiskSpace     = [math]::Round((Get-ChildItem -path $ConsPath -File -Recurse | measure-object -Property length -Sum).Sum / 1gb, 2)
             
+            Unblock-File -Path $ConsPath
             $Process = Start-Program  -Program $ConsPath -LogFilePath $ScriptLogFilePath -Arguments $UpdateArguments -WorkDir $WorkDir -Wait -Evaluate
 
-            $Res.Data               = $Process
-            $Res.LogBuffer          = $Global:LogBuffer
-            $Res.NewFreeDiskSpace   = [math]::Round((Get-PSDrive ((Get-Item $WorkDir).PSDrive.Name)).Free / 1gb, 2)
+            $Res.Data         = $Process
+            $Res.LogBuffer    = $Global:LogBuffer
+            $Res.NewDiskSpace = [math]::Round((Get-ChildItem -path $ConsPath -File -Recurse | measure-object -Property length -Sum).Sum / 1gb, 2)
 
             return  $Res
         }
         Add-ToLog -Message "Starting update." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         try {
-            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -credentials $Credentials
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials -TestComputer -SessionTimeOut $Global:SessionTimeout
             if ($res.LogBuffer) {
                 foreach ($item in $Res.LogBuffer) {
                     Add-ToLog @item
                 }            
             }
-            if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
-                Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            if (($Res.NewDiskSpace) -and ($Res.DiskSpace)) {
+                Add-ToLog -Message "Folder [$ConsPath] size changed on [$RemoteComputer] from [$($Res.DiskSpace) GB] to [$($Res.NewDiskSpace) GB], difference [$([math]::round(($Res.NewDiskSpace - $Res.DiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
             }
-            $Global:StateObject.Action      = "Update"
-            $Global:StateObject.State       = "Completed udate on [$($Global:RemoteComputer)]"
-            $Global:StateObject.GlobalState = $True
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+            
+            $Res = . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
 
-            . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
-
+            if ($Res) {
+                $Global:StateObject.Data        = $Res
+                $Global:StateObject.Action      = "Update"
+                $Global:StateObject.State       = "Errors while update on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $false
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
+            Else {
+                $Global:StateObject.Action      = "Update"
+                $Global:StateObject.State       = "Completed udate on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $True
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
         }
         Catch {
             $Global:StateObject.Action      = "Update"
             $Global:StateObject.State       = "Errors while update on [$($Global:RemoteComputer)]"
             $Global:StateObject.GlobalState = $false
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+        }
+    }
+    "BASETEST" { 
+        $ScriptBlock = {
+            $Res = [PSCustomObject]@{
+                Data         = $Null
+                LogBuffer    = @()
+                DiskSpace    = 0
+                NewDiskSpace = 0
+            }
+
+            #Write-host "ParentLevel = $ParentLevel"
+            $ConsPath          = $Using:ConsPath
+            $UpdateArguments   = $Global:BaseTestArguments
+            $WorkDir           = $Using:WorkDir
+            $ScriptLogFilePath = $Using:ScriptLogFilePath
+            $Res.DiskSpace = [math]::Round((Get-ChildItem -Path $ConsPath -File -Recurse | Measure-Object -Property length -Sum).Sum / 1gb, 2)
+            
+            $Process = Start-Program  -Program $ConsPath -LogFilePath $ScriptLogFilePath -Arguments $UpdateArguments -WorkDir $WorkDir -Wait -Evaluate
+
+            $Res.Data             = $Process
+            $Res.LogBuffer        = $Global:LogBuffer
+            $Res.NewDiskSpace = [math]::Round((Get-ChildItem -Path $ConsPath -File -Recurse | Measure-Object -Property length -Sum).Sum / 1gb, 2)
+
+            return  $Res
+        }
+        Add-ToLog -Message "Starting base test." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+        try {
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials -TestComputer -SessionTimeOut $Global:SessionTimeout
+            if ($res.LogBuffer) {
+                foreach ($item in $Res.LogBuffer) {
+                    Add-ToLog @item
+                }            
+            }
+            if (($Res.NewDiskSpace) -and ($Res.DiskSpace)) {
+                Add-ToLog -Message "Folder [$ConsPath] size changed on [$RemoteComputer] from [$($Res.DiskSpace) GB] to [$($Res.NewDiskSpace) GB], difference [$([math]::round(($Res.NewDiskSpace - $Res.DiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            }           
+
+            $res = . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+            if ($res) {
+                $Global:StateObject.Data        = $Res
+                $Global:StateObject.Action      = "Update"
+                $Global:StateObject.State       = "Errors while base test on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $false
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
+            Else {
+                $Global:StateObject.Action      = "Base test"
+                $Global:StateObject.State       = "Completed base test on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $True
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
+
+        }
+        Catch {
+            $Global:StateObject.Action      = "Base test"
+            $Global:StateObject.State       = "Errors while base test on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $false
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+        }
+    }
+    "TEST" { 
+        $ScriptBlock = {
+            $Res = [PSCustomObject]@{
+                Data         = $Null
+                LogBuffer    = @()
+                DiskSpace    = 0
+                NewDiskSpace = 0
+            }
+
+            #Write-host "ParentLevel = $ParentLevel"
+            $ConsPath          = $Using:ConsPath
+            $UpdateArguments   = $Global:TestArguments
+            $WorkDir           = $Using:WorkDir
+            $ScriptLogFilePath = $Using:ScriptLogFilePath
+            $Res.DiskSpace     = [math]::Round((Get-ChildItem -Path $ConsPath -File -Recurse | Measure-Object -Property length -Sum).Sum / 1gb, 2)
+            
+            $Process = Start-Program  -Program $ConsPath -LogFilePath $ScriptLogFilePath -Arguments $UpdateArguments -WorkDir $WorkDir -Wait -Evaluate
+
+            $Res.Data         = $Process
+            $Res.LogBuffer    = $Global:LogBuffer
+            $Res.NewDiskSpace = [math]::Round((Get-ChildItem -Path $ConsPath -File -Recurse | Measure-Object -Property length -Sum).Sum / 1gb, 2)
+
+            return  $Res
+        }
+        Add-ToLog -Message "Starting resource test." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+        try {
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials -TestComputer -SessionTimeOut $Global:SessionTimeout
+            if ($res.LogBuffer) {
+                foreach ($item in $Res.LogBuffer) {
+                    Add-ToLog @item
+                }            
+            }
+            if (($Res.NewDiskSpace) -and ($Res.DiskSpace)) {
+                Add-ToLog -Message "Folder [$ConsPath] size changed on [$RemoteComputer] from [$($Res.DiskSpace) GB] to [$($Res.NewDiskSpace) GB], difference [$([math]::round(($Res.NewDiskSpace - $Res.DiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            }
+            
+            $res = . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+
+            if ($res) {
+                $Global:StateObject.Data        = $Res
+                $Global:StateObject.Action      = "Resource test"
+                $Global:StateObject.State       = "Completed resource test on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $True
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
+            Else {
+                $Global:StateObject.Action      = "Resource test"
+                $Global:StateObject.State       = "Errors while resource test on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $false
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            } 
+        }
+        Catch {
+            $Global:StateObject.Action = "Resource test"
+            $Global:StateObject.State = "Errors while resource test on [$($Global:RemoteComputer)]"
+            $Global:StateObject.GlobalState = $false
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
         }
     }
     "SHRINK" { 
         $ScriptBlock = {
             $Res = [PSCustomObject]@{
-                Data             = $Null
-                LogBuffer        = @()
-                FreeDiskSpace    = 0
-                NewFreeDiskSpace = 0
+                Data         = $Null
+                LogBuffer    = @()
+                DiskSpace    = 0
+                NewDiskSpace = 0
             }
 
             $ConsPath            = $Using:ConsPath
             $ShrinkArguments     = $Using:ShrinkArguments
             $WorkDir             = $Using:WorkDir
             $ScriptLogFilePath   = $Using:ScriptLogFilePath
-            $Res.FreeDiskSpace   = [math]::Round((Get-PSDrive ((Get-Item $WorkDir).PSDrive.Name)).Free / 1gb, 2)
+            $Res.DiskSpace   = [math]::Round((Get-ChildItem -path $ConsPath -File -Recurse | measure-object -Property length -Sum).Sum / 1gb, 2)
 
             $Process = Start-Program  -Program $ConsPath -LogFilePath $ScriptLogFilePath -Arguments $ShrinkArguments -WorkDir $WorkDir -Wait -Evaluate
 
-            $Res.Data               = $Process
-            $Res.LogBuffer          = $Global:LogBuffer
-            $Res.NewFreeDiskSpace   = [math]::Round((Get-PSDrive ((Get-Item $WorkDir).PSDrive.Name)).Free / 1gb, 2)
+            $Res.Data         = $Process
+            $Res.LogBuffer    = $Global:LogBuffer
+            $Res.NewDiskSpace = [math]::Round((Get-ChildItem -path $ConsPath -File -Recurse | measure-object -Property length -Sum).Sum / 1gb, 2)
 
             return  $Res
         }
         Add-ToLog -Message "Starting database shrink." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
         try {
-            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils" -Credentials $Credentials -TestComputer -SessionTimeOut $Global:SessionTimeout
             if ($Res.LogBuffer) {
                 foreach ($item in $Res.LogBuffer) {
                     Add-ToLog @item
                 }            
             }
-            if (($Res.NewFreeDiskSpace) -and ($Res.FreeDiskSpace)) {
-                Add-ToLog -Message "Free disk [$($ConsPath.Substring(0, 1)):] space changed on [$RemoteComputer] from [$($Res.FreeDiskSpace) GB] to [$($Res.NewFreeDiskSpace) GB], difference [$([math]::round(($Res.NewFreeDiskSpace - $Res.FreeDiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+            if (($Res.NewDiskSpace) -and ($Res.DiskSpace)) {
+                Add-ToLog -Message "Folder [$ConsPath] size changed on [$RemoteComputer] from [$($Res.DiskSpace) GB] to [$($Res.NewDiskSpace) GB], difference [$([math]::round(($Res.NewDiskSpace - $Res.DiskSpace),2)) GB]" -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
             }
-        
-            $Global:StateObject.Action      = "Shrink"
-            $Global:StateObject.State       = "Completed shrink on [$($Global:RemoteComputer)]"
-            $Global:StateObject.GlobalState = $True
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
 
-            . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
-
+            $res = . "$PSCommandPath" -LogCutDate $Global:ScriptStartTime -InitLocal $false -InitGlobal $false
+            if ($res) {
+                $Global:StateObject.Data        = $Res
+                $Global:StateObject.Action      = "Shrink"
+                $Global:StateObject.State       = "Errors while shrink on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $false
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            }
+            Else {
+                $Global:StateObject.Action      = "Shrink"
+                $Global:StateObject.State       = "Completed shrink on [$($Global:RemoteComputer)]"
+                $Global:StateObject.GlobalState = $True
+                Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
+            } 
         }
         Catch {
             $Global:StateObject.Action      = "Shrink"
             $Global:StateObject.State       = "Errors while shrink on [$($Global:RemoteComputer)]"
             $Global:StateObject.GlobalState = $false
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
         }
     }
     Default {
@@ -281,16 +417,10 @@ switch ($Service.ToUpper()) {
             Return $Res
         }        
         
-        Add-ToLog -Message "Starting statistic on computer [$RemoteComputer]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
+        Add-ToLog -Message "Starting statistic on computer [$RemoteComputer]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1) 
         try {
-            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"  -Credentials $Credentials
-            if ($res) {
-                $Data = $res.ConsErrorFile
-                if ($Data){
-                    foreach ($item in $Data) {
-                        Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Error" -Level ($ParentLevel + 1)
-                    }                
-                }
+            $Res = Invoke-PSScriptBlock -ScriptBlock $Scriptblock -Computer $RemoteComputer -ImportLocalModule "AlexkUtils"  -Credentials $Credentials -TestComputer
+            if ($res) {                
                 $Data = $res.ConsInetFileList
                 if ($Data) {
                     foreach ($item in $Data) {
@@ -303,6 +433,12 @@ switch ($Service.ToUpper()) {
                         Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
                     }                
                 }  
+                $Data = $res.ConsErrorFile
+                if ($Data) {
+                    foreach ($item in $Data) {
+                        Add-ToLog -Message $item -logFilePath $ScriptLogFilePath -Display -Status "Error" -Level ($ParentLevel + 1)
+                    }                
+                }
                 $Data = $res.AvgDlSpeed
                 if ($Data) {     
                     Add-ToLog -Message "Average download speed [$Data]." -logFilePath $ScriptLogFilePath -Display -Status "Info" -Level ($ParentLevel + 1)
@@ -317,14 +453,17 @@ switch ($Service.ToUpper()) {
             $Global:StateObject.Action      = "Statistic"
             $Global:StateObject.State       = "Completed statistic on [$($Global:RemoteComputer)]"
             $Global:StateObject.GlobalState = $True
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
         }
         Catch {
             $Global:StateObject.Action      = "Statistic"
             $Global:StateObject.State       = "Errors while statistic on [$($Global:RemoteComputer)]"
             $Global:StateObject.GlobalState = $false
-            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram" -SaveOnChange -AlertOnChange
+            Set-State -StateObject $Global:StateObject -StateFilePath $Global:StateFilePath -AlertType "telegram"
         }
+        if ( $res.ConsErrorFile ) {
+            Return $res.ConsErrorFile
+        }        
     }    
 }
 
