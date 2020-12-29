@@ -5,7 +5,7 @@
 [string] $Global:RemoteComputer     = ""         
 
 ######################### no replacement ########################
-[string] $Global:StateFilePath    = "$($Global:ProjectRoot)\$($Global:LOGSFolder)\States.xml"
+[string] $Global:gsStateFilePath    = "$($Global:ProjectRoot)\$($Global:gsLOGSFolder)\States.xml"
 [string] $Global:ConsErrorFile    = "CONS_ERR.TXT"
 [string] $Global:ConsInetFileList = "CONS_INET_LISTFILES.TXT"
 [string] $Global:ConsInetFile     = "CONS_INET.TXT"
@@ -16,7 +16,7 @@
 [string] $Global:BaseTestArguments = "/ADM /BASETEST /BASE* /YES"
 [string] $Global:TestArguments     = "/TEST /YES"
 
-. $Global:Plugins.telegram
+. $Global:gsPlugins.telegram
 
 [bool]  $Global:LocalSettingsSuccessfullyLoaded  = $true
 # Error trap

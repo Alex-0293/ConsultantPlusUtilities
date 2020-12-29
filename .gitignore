@@ -1,7 +1,3 @@
-ACL/Access.csv
-ACL/Owner.csv
-ACL/Roles.csv
+ACL/*
 SETTINGS/Settings.ps1
-LOGS/ConsultantPlusUtilities.log
-LOGS/Errors.log
-LOGS/States.xml
+LOGS/*
